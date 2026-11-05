@@ -136,3 +136,34 @@ For each object: download original raw bytes; verify S3 metadata SHA256 equals d
 - [ ] Raw session export locally retained until S3 receipt
 - [ ] Actual Android export adapter and validated decoder/calibration attached before real pressure reporting
 - [ ] AWS Free Plan expiry date noted; regular off-cloud backups planned
+
+
+## v0.2: real Dashboard chart/quality integration (experimental)
+
+Additional modules in `dashboard_components/` and `dashboard_services/` are
+copied from the uploaded original RFID_Dashboard `src/`, retaining its tested
+multi-tag Altair charts, nearest-time pairing, metrics and session quality
+summaries. `offline_analysis.py` adapts the pilot CSV / ZIP structure to the
+original DataFrame schema. Raw uploaded bytes and S3 immutable object layout
+are unchanged. No credentials or private configuration are included.
+
+- Upload / Session Library: Recorded trends for RSSI, USER0/USER1 payloads,
+  full packed words, BEST_ACC diagnostics, and other numeric fields present.
+- Session-quality and session-summary panels, header validation statistics.
+- Nearest-timestamp comparison of two EPCs, configurable tolerance.
+- Multi-session elapsed-time overlay to compare measurements from 2–5 archives.
+- Derived CSV can be downloaded; original raw archive remains immutable.
+
+**Not yet enabled:** live data, MQTT ACK, Auth API user/reader management,
+server-owned pressure models/calibration activation, validated physical pressure
+estimates, tag nicknames persisted in S3, complete original release provenance.
+Do not assume raw USER0/USER1 words establish valid physical pressure. A signed
+and approved calibration profile plus physical decoder validation is required.
+
+Deploy by committing this folder to the `RFID_Offline_Pilot` repository.
+Because `requirements.txt` now includes `altair`, Streamlit will install it.
+Streamlit Secrets `[aws]` are the same as v0.1. Back up the v0.1 git commit
+before replacing. For real TC22R exports, first validate schema compatibility
+against `rfid_formats.py`, which still requires the pilot contract.
+
+Full source review inventory: [`SOURCE_AUDIT.md`](SOURCE_AUDIT.md).

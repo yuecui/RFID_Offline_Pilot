@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 from rfid_formats import parse_session, SessionValidationError
 from s3_store import S3SessionStore
+from offline_views import render_session, render_session_comparison
 
 st.set_page_config(page_title="RFID Offline Pilot", page_icon="📡", layout="wide")
 st.title("RFID Offline Pilot")
@@ -26,30 +27,10 @@ except Exception as exc:
     st.error(f"Could not initialize S3 connection: {type(exc).__name__}. Check Secrets without pasting credentials into chat.")
 
 
-def session_view(parsed):
-    frame = pd.DataFrame(parsed.rows)
-    frame["timestamp_utc"] = pd.to_datetime(frame["timestamp_utc"], utc=True)
-    frame["rssi_number"] = pd.to_numeric(frame["rssi"], errors="coerce")
-    t0, t1 = frame["timestamp_utc"].min(), frame["timestamp_utc"].max()
-    a, b, c, d = st.columns(4)
-    a.metric("Readings", f"{len(frame):,}")
-    b.metric("Unique EPCs", f"{frame['epc'].nunique():,}")
-    c.metric("Mean RSSI (dBm)", f"{frame['rssi_number'].mean():.1f}")
-    d.metric("Duration (seconds)", f"{(t1-t0).total_seconds():.1f}")
-    st.caption("RSSI is a radio signal metric, not pressure. Pressure, temperature and calibration outputs require your existing validated decoder/calibration modules.")
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Reads by EPC")
-        counts = frame["epc"].value_counts().rename_axis("EPC").reset_index(name="reads")
-        st.bar_chart(counts.set_index("EPC"))
-    with right:
-        st.subheader("Mean RSSI by EPC")
-        means = frame.groupby("epc")["rssi_number"].mean().sort_values()
-        st.bar_chart(means)
-    st.subheader("Raw readings (analysis view)")
-    st.dataframe(frame.drop(columns=["rssi_number"]), use_container_width=True, hide_index=True)
-    st.download_button("Download analysis CSV", frame.drop(columns=["rssi_number"]).to_csv(index=False).encode("utf-8"), file_name=f"{parsed.manifest['session_id']}_analysis.csv", mime="text/csv")
-    return frame
+def session_view(parsed, prefix="session_"):
+    """Preserve the storage flow; use the original Dashboard's charts and metrics."""
+    return render_session(parsed, prefix)
+
 
 upload_tab, library_tab, compare_tab = st.tabs(["Upload Session", "Session Library", "Compare Sessions"])
 with upload_tab:
@@ -61,7 +42,7 @@ with upload_tab:
             parsed = parse_session(raw, upl.name)
             st.success(f"Validated session {parsed.manifest['session_id']} | {len(parsed.rows):,} readings | SHA256 {parsed.raw_sha256[:16]}…")
             st.json(parsed.manifest, expanded=False)
-            session_view(parsed)
+            session_view(parsed, prefix="upload_")
             confirmation = st.checkbox("I confirm this is approved research data and that this is the correct session to archive.")
             if st.button("Save immutable raw file to S3", disabled=not configured or not confirmation, type="primary"):
                 with st.spinner("Uploading to S3…"):
@@ -92,7 +73,7 @@ with library_tab:
                 saved = st.session_state.get("loaded_library")
                 if saved and saved[0] == chosen:
                     parsed = parse_session(saved[1], chosen)
-                    session_view(parsed)
+                    session_view(parsed, prefix="library_")
                     st.download_button("Download ORIGINAL raw upload", saved[1], file_name=chosen.rsplit("/",1)[-1])
             else:
                 st.info("No sessions in S3. Upload the sample ZIP first.")
@@ -107,17 +88,11 @@ with compare_tab:
             entries = store.list()
             choices = st.multiselect("Choose 2–5 archived files", [e["key"] for e in entries], max_selections=5)
             if st.button("Compare selected sessions", disabled=len(choices)<2):
-                summary=[]
-                for key in choices:
-                    parsed = parse_session(store.get(key), key)
-                    df = pd.DataFrame(parsed.rows)
-                    summary.append({"session_id":parsed.manifest["session_id"], "reader_id":parsed.manifest["reader_id"],
-                        "records":len(df), "unique_epc":df["epc"].nunique(), "mean_rssi":pd.to_numeric(df["rssi"], errors="coerce").mean(),
-                        "s3_key":key})
-                comp = pd.DataFrame(summary)
-                st.dataframe(comp, hide_index=True, use_container_width=True)
-                st.bar_chart(comp.set_index("session_id")[["records", "unique_epc"]])
-                st.download_button("Download comparison CSV",comp.to_csv(index=False).encode("utf-8"),"session_comparison.csv")
+                st.session_state["comparison_loaded"] = choices
+            loaded = st.session_state.get("comparison_loaded", [])
+            if loaded and set(loaded) == set(choices) and len(loaded)>=2:
+                sessions = [parse_session(store.get(key), key) for key in loaded]
+                render_session_comparison(sessions)
         except Exception as exc:
             st.error(f"Comparison failed ({type(exc).__name__}).")
     else:
