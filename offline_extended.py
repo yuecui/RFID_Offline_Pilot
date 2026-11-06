@@ -24,6 +24,8 @@ from dashboard_services.provenance import deterministic_session_hash
 from dashboard_services.exports import build_experiment_package
 from dashboard_services.lineage import build_layered_record
 from offline_metadata import save_event
+from offline_inspector import readings_for_epc, reading_label, find_readings
+from hashlib import sha256
 
 
 def tag_details(frame, store, catalog, prefix):
@@ -200,12 +202,48 @@ def trace_and_package(parsed,frame,prefix):
         st.caption("Could not compute the optional canonical digest")
     st.json(parsed.manifest,expanded=False)
     if not frame.empty:
-        choice=st.selectbox("Inspect source/derived layer",list(range(min(100,len(frame)))),
-                            format_func=lambda i:f"Read {i+1}",key=prefix+"lineage")
-        try:
-            st.json(build_layered_record(frame.iloc[choice]),expanded=False)
-        except Exception:
-            st.dataframe(frame.iloc[[choice]],use_container_width=True)
+        with st.expander("Advanced Diagnostics · Inspect individual readings", expanded=False):
+            st.caption("Diagnostic only: inspect a recorded source row and its derived fields. "
+                       "The original Session ZIP is not changed.")
+            epcs = sorted(frame["epc"].dropna().astype(str).unique().tolist())
+            selected_epc = st.selectbox("Filter by EPC", epcs, key=prefix+"inspect_epc")
+            readings = readings_for_epc(frame, selected_epc)
+            epc_key = sha256(selected_epc.encode("utf-8")).hexdigest()[:12]
+            if readings.empty:
+                st.info("No readings for this EPC.")
+            else:
+                st.caption(f"{len(readings):,} readings for selected EPC, ordered by acquisition time (UTC).")
+                mode = st.radio("Find a reading", ["Record number", "Search time / reading ID"],
+                                horizontal=True, key=prefix+"inspect_mode")
+                chosen_index = None
+                if mode == "Record number":
+                    record_no = st.number_input("Record number within selected EPC", min_value=1,
+                                                max_value=len(readings), value=1, step=1,
+                                                key=prefix+"inspect_record_no_"+epc_key)
+                    chosen_index = int(record_no) - 1
+                else:
+                    search_text = st.text_input("Search by UTC timestamp or reading ID",
+                                                placeholder="e.g. 16:09:30 or 754253d9",
+                                                key=prefix+"inspect_query")
+                    positions, total = find_readings(readings, search_text, limit=30)
+                    if not search_text.strip():
+                        st.info("Enter part of a timestamp, reading ID, or record number to search.")
+                    elif not positions:
+                        st.info("No matching readings for this EPC.")
+                    else:
+                        st.caption(f"{total:,} matches" +
+                                   ("; showing first 30. Refine your search to narrow results." if total > 30 else ""))
+                        chosen_index = st.selectbox("Matching reading", positions,
+                            format_func=lambda i: reading_label(readings.iloc[i], i),
+                            key=prefix+"inspect_match_"+epc_key)
+                if chosen_index is not None:
+                    selected = readings.iloc[int(chosen_index)]
+                    st.caption(reading_label(selected, int(chosen_index)))
+                    try:
+                        st.json(build_layered_record(selected), expanded=False)
+                    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                        st.warning(f"Layered diagnostics unavailable ({type(exc).__name__}); showing recorded fields.")
+                        st.dataframe(readings.iloc[[int(chosen_index)]], use_container_width=True, hide_index=True)
     opt=metric_options(frame)
     metric_name=next(iter(opt)) if opt else "RSSI"
     metric_col=opt[metric_name][0] if opt else "rssi"
