@@ -1,28 +1,12 @@
-# Migration contract: Pilot S3 to lab server / InfluxDB 3
+# Future lab server migration — RFID Offline Pilot v0.3
 
-## Current assurances
+1. Enumerate `sessions/<session-id>/<raw-sha256>.zip|csv` and `sessions/_metadata/` in S3. Use a restricted AWS identity, never anonymous access.
+2. Download files **without modification**; recompute SHA256; parse manifest and validate row count, Session ID, Reader ID, UTC timestamps and per-reading IDs.
+3. Write raw records to the permanent system with an idempotent mapping using `(reader_id, session_id, reading_id)` (or an agreed stable fallback). Do not alter original captured timestamps or raw USER bytes.
+4. Preserve append-only tag, Session and calibration-plan metadata events independently of raw records. Do not convert a self-declared editor identifier into a verified user identity.
+5. Apply approved Decoder Profile and calibration/model **versions** in a derived layer. Do not interpret pilot synthetic predictions or header-valid temperatures as independent physical validation. Retain provenance.
+6. Import reference metadata annotations only where absent in original raw records, with separate source attribution and reviewer approval.
+7. Compare counts, SHA256 manifest and a selected set of derived results against cloud pilot; export a migration audit and back up before any S3 retention decision.
+8. Do not delete the original S3 Session archives until the lab holds two verified separate copies. Keep the final IAM disabled/retired when cloud operations end.
 
-- Original uploaded CSV/ZIP bytes are stored unchanged under content-addressed keys.
-- Upload uses `IfNoneMatch='*'` to prevent accidental overwrites.
-- The app never receives `DeleteObject` permission.
-- Format checks validate one session/reader, timestamp timezone, values and ZIP structure.
-
-## Known gaps that MUST be resolved before real experiments
-
-- Unknown actual Android `Session Export` CSV/ZIP schema: map it without dropping fields.
-- Actual raw acquisition fields beyond EPC, USER0, USER1, RSSI, timestamps (CONFIG, read index, session metadata, Tcal, etc.): extend schema.
-- Record-level globally stable ID for repeated scans and replay/dedup.
-- Validated sensor decoder, calibration plans, estimation and pressure decision modules not included in this starter.
-- Cloud import acknowledgements and reconciliation versus on-device local exports.
-- Explicit policy for shared file visibility among operators.
-
-## Suggested importer order
-
-1. List S3 under `sessions/` (use dedicated migration identity, not the deployed app credential).
-2. Download raw original object, hash it, compare with SHA-256 from key and metadata.
-3. Verify one Session+Reader and expected record count; create immutable import receipt.
-4. Normalize to the production schema with a versioned adapter; preserve raw data and timestamps.
-5. Apply idempotent record keys before writing to InfluxDB 3.
-6. Trigger established decoder/calibration/decision pipeline **without overwriting raw values**.
-7. Reconcile record counts, timestamps, session assignment, tag IDs, rejected records and derived results.
-8. Archive audit report and backup; only then consider reducing temporary cloud usage.
+Current S3 IAM policy covers `sessions/*`, so metadata events use `sessions/_metadata/tag/`, `sessions/_metadata/session/`, and `sessions/_metadata/plan/` without expanding privileges.

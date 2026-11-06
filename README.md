@@ -1,169 +1,83 @@
-# RFID Offline Pilot v0.1 — Streamlit Community Cloud + private S3
+# RFID Offline Pilot v0.3 — Original Dashboard Offline Analysis
 
-**Status: local sample parsing tested; AWS account resources NOT created; actual S3 upload NOT run.**
+**Purpose:** make existing TC22R offline Session ZIP files usable in a **private** Streamlit Community Cloud app backed by immutable **private AWS S3** objects, while the lab's permanent server is pending. This is **not** the live RFID platform.
 
-A small, isolated pilot for interim lab experiments. It does **not** replace the
-existing `RFID_Dashboard` production stack. The current Android export format
-and production decoder/calibration implementation were not provided. Therefore
-this starter accepts the *pilot interchange format* below; mapping the actual
-TC22R export and pressure estimation is a required integration step.
+## What this release adds beyond v0.2
 
-## Recommended production boundary
+- **Temperature**: T.5 strict USER1 (`0b11`) + USER5/USER6 calibration formula, and S.5 strict USER0/USER1 (`0b10`, reserved-bit checks), ported from the uploaded Android `AsygnDecoder.kt`. Numeric temperature is marked `HEADER_VALID_CALCULATED_NOT_PHYSICALLY_VALIDATED`; it must not be portrayed as scientifically calibrated/validated. T.5-like 192-bit EPC plus matching USER1 header may be inferred for exploratory identification; confirm variant in Tag catalog. S.5 exploratory readings with nonconforming header are kept separate and labelled NON-VALIDATED.
+- Full recorded trend menu: temperature °C (when format/calibration present), raw temperature, USER0/1/5/6 words, S.5 exploratory raw strain/temperature, RSSI, independent known reference pressure/temperature.
+- Variant-aware tag/data-quality diagnostics with explicit support for unknown tags (no invented temperature).
+- S3-backed **Tag name/variant annotations**, **Session reference-pressure, reference-temperature and condition annotations** via append-only JSON events. Raw uploads are never modified, and nonempty original reference values are never silently overwritten. Editors provide a *self-declared* name, **not authenticated identity**.
+- Calibration condition coverage planning, candidate reference dataset ZIP, structural experiment Readiness evaluation/ZIP, layered record provenance and experiment package ZIP, reusing corresponding modules from the uploaded original Dashboard source.
+- Recorded Session Replay with time-progress slider (not live MQTT); two-tag nearest-time alignment; historical multi-Session overlay and **two different Chicago-local-date** comparison; comprehensive derived CSV exports.
+- Calibration Plan **archive and download**; validation of DRAFT pressure model schema and **SYNTHETIC-only** model preview using the original production code. Uploading a plan NEVER activates a model, and no raw USER values are misrepresented as verified PSI.
 
-- A **private** Streamlit Community Cloud app handles uploads, analysis, and user access through invited viewers.
-- A **private** Amazon S3 **general purpose** bucket in `us-east-2` stores *immutable original* CSV/ZIP files under `sessions/`.
-- An IAM programmatic identity can only `ListBucket` for pilot prefixes and `GetObject`/`PutObject` for pilot objects. It **cannot delete** objects, manage IAM, create buckets, or access unrelated S3 buckets.
-- No credentials, raw data, or passwords go into GitHub.
-- Public access blocking and default SSE-S3 encryption stay enabled on the S3 bucket.
-- S3 object keys include the raw SHA-256 hash. The application uses `If-None-Match: *` to refuse accidental overwrites. Retain separate offline backups for irreplaceable research data.
+## Status and explicit limits
 
-## 1. AWS Budget (do this first)
+1. `19` offline Python logic / export tests passed in the authoring environment. A separate mocked UI import/render smoke test also passed. **The hosted Streamlit UI, S3 cloud writes, and deployment have NOT yet been verified with v0.3.** Redeploy and retest before laboratory use.
+2. Your actual 1,145-reading TC22R ZIP was processed *privately* for local contract checks; **real measurements are not included in this release archive.** The repo contains synthetic samples only.
+3. These functions **cannot be fully reproduced** in an offline, serverless Streamlit app: live MQTT data, broker ACL / Reader status, actual Android login/reader approval, collector ACK/Delivery Recovery, production pressure-model activation, and InfluxDB lifecycle operations. Those remain with the lab's Docker service.
+4. The uploaded original backend currently uses a `header_only_v1` physical decoder contract. **Matching USER header bits alone does not validate an engineering strain or a pressure estimate.** Production estimated PSI and `LOW/NORMAL/HIGH` decisions remain intentionally unavailable until physically validated decoder and model evidence exists.
+5. In the private Streamlit Cloud app, authorized *viewers of the app* can see the shared Sessions, annotations, and plans. There is currently **no per-user permission** or verified-editor authorization for these metadata operations. Do not make the app public.
+6. S3 uploads: max 25 MiB original archive, max 200,000 rows, max 64 MiB decompressed ZIP. Large archives or large multi-Session comparisons may exceed free Streamlit memory. S3 is object storage, not a row-query engine.
 
-In the **AWS Console** (account owner/billing-permitted identity):
+## Files
 
-1. Open **Billing and Cost Management → Budgets → Create budget**.
-2. Choose **Cost budget** (Monthly, recurring; custom budget if required) with a **USD $5 monthly budget** for this small pilot.
-3. Configure actual-spend email alerts at **$1 (20%)**, **$3 (60%)**, **$5 (100%)**, and optionally forecasted spend approaching $5.
-4. Enter the billing contact's email and **complete email recipient verification** if requested.
-5. Check **Billing → Free Tier** separately; monitor gross resource consumption as credits may offset charges. Consider a free-tier usage alert if available to your account.
-6. Remember: **Budgets are alerts, not a spending cap**; billing reports and alert emails can be delayed. Do not create EC2/RDS/NAT Gateway for this project.
+- `app.py` — four top-level tabs (Upload Session, Session Library, Compare Sessions, Calibration Plans)
+- `offline_views.py` — recorded trends, EPC, tag alignment, quality, replay, two-day/session comparison
+- `offline_extended.py` — catalog/annotations, calibration planning, readiness, provenance, packages, pressure status
+- `offline_profiles.py` — guarded S.5/T.5 temperature formula and variant diagnostics
+- `offline_analysis.py` — adapter from TC22R Session ZIP/CSV to original Dashboard DataFrames
+- `offline_metadata.py` — append-only S3 metadata event handling
+- `dashboard_components/`, `dashboard_services/` — corresponding pure/plotting helpers from the uploaded original Dashboard `src/`
+- `pressure_calibration.py`, `pressure_decision.py`, `pressure_validation.py`, `pressure_model_schema.json` — original strictly guarded model/schema and synthetic preview
+- `s3_store.py` / `rfid_formats.py` — unchanged S3 immutable Session archive and input validation
 
-AWS instructions: https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-create.html
+## Deploy safely over the existing v0.2 repo
 
-## 2. S3 bucket and least-privileged identity
-
-1. Finish bucket creation and copy its **EXACT final name** from the S3 Buckets list. If using *Account Regional namespace*, the final name may include an AWS-added suffix.
-2. Keep **Block all public access** enabled; bucket owner enforced (ACLs disabled); SSE-S3 encryption; avoid public bucket policies.
-3. In **IAM → Policies → Create policy → JSON**, paste `iam/rfid-s3-policy.template.json` and replace every `REPLACE_WITH_EXACT_BUCKET_NAME` with the exact bucket name; name the policy `RFIDOfflinePilotS3RW`. It covers only the `sessions/` and `healthchecks/` prefixes and gives no delete permission.
-4. In **IAM → Users → Create user**, create `rfid-offline-streamlit` **without console access**, then attach only the new customer-managed policy. Use least privilege; do not attach `AmazonS3FullAccess`, `AdministratorAccess`, or an AWS root access key.
-5. For Streamlit Community Cloud (an external host that does not automatically have an AWS role), create one **programmatic access key** for that restricted IAM user. Keep it only in a password manager or Streamlit **Secrets**; never in Git, chat, screenshots, or an Android APK. Consider more advanced short-lived credentials if an approved federation path is available.
-6. Record which teammate owns the IAM user, and plan to disable the access key after migrating to the lab server.
-
-AWS IAM example: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_examples_s3_rw-bucket-console.html
-
-## 3. Test a REAL S3 upload/download
-
-On a computer with AWS CLI configured for **the restricted IAM user**:
+Do not remove your existing AWS secrets, change the S3 bucket, or overwrite the original Android/production Dashboard repo.
 
 ```bash
-aws sts get-caller-identity
-export RFID_S3_BUCKET='EXACT-FINAL-BUCKET-NAME'
-python scripts/test_s3_session.py
+cd ~/Developer/RFID_Offline_Pilot
+# Ensure tracked modifications are saved; the next unzip replaces project source.
+git status
+cp -R . ../RFID_Offline_Pilot_before_v03_backup
+unzip -o ~/Downloads/RFID_Offline_Pilot_v0.3_Offline_Analysis.zip -d .
+git diff --stat
+python3 -m pytest -q  # optional local test env
+# Verify no credentials or real experimental data are staged.
+git add app.py offline_analysis.py offline_views.py offline_extended.py \
+    offline_profiles.py offline_metadata.py dashboard_components dashboard_services \
+    pressure_calibration.py pressure_validation.py pressure_decision.py \
+    pressure_model_schema.json requirements.txt README.md MIGRATION.md \
+    SOURCE_AUDIT.md CHANGELOG.md examples tests
+
+git diff --cached --stat
+git commit -m "feat(offline): restore extended RFID analysis, temperature and calibration planning"
+git push origin main
 ```
 
-Expected: `PASS: Real S3 sample Session upload/download; SHA256, bytes and records match`.
-The synthetic test Session is stored at `sessions/PILOT_TEST_001/<sha256>.zip`, and the uploaded bytes are downloaded and verified without overwriting any existing file. The application never uses a public bucket URL. **This step has not been executed on your AWS account by ChatGPT.**
+If the GitHub `main` branch advanced, fetch/rebase safely while the tree is clean; do **not** force-push. Streamlit Community Cloud typically redeploys after `main` receives a commit. Existing `st.secrets["aws"]` fields stay the same.
 
-If the test fails with AccessDenied, confirm the policy bucket ARN matches the *exact* bucket name, and that the correct IAM user credentials are active.
+## Acceptance test sequence
 
-## 4. Streamlit Community Cloud deployment
+1. Open the **private** deployed App; confirm the new analysis tabs, **Calibration Plans** top-level tab and new `Temperature (°C)` metric for valid T.5 example.
+2. Upload `examples/diagnostic_t5_sample.zip`; expect six synthetic records. The T.5-like tag has calculated temperature; unknown type has no calculated temperature. Check `Data quality → Variant-aware USER header diagnostics`.
+3. Upload the **real** TC22R offline ZIP locally held by the user. Verify original record count/EPC count and strict T.5 diagnostics. Preserve invalid/unknown variants and read their raw words without inventing temperatures.
+4. In `Tag identity / Rename`, save a friendly name and (only if independently confirmed) S.5/T.5 variant. Reload Session to see annotations. Original ZIP sha256 must not change.
+5. In `Session details`, annotate **missing** reference pressure/temperature and condition; reload. Original nonempty reference fields remain unchanged. Do not treat user-entered references as physically independently validated.
+6. Compare two tags (nearest timestamp) and two saved Sessions (elapsed time and Chicago-local-day overlay).
+7. Download readiness report ZIP, reference dataset ZIP and experiment package ZIP; verify that **manifest.json** and CSV members open.
+8. In `Calibration Plans`, upload a valid JSON research plan, then download it. A draft model can only run a clearly marked *synthetic preview*, not generate real pressure from RFID words.
+9. Refresh browser; load Session from S3; download the **original** archive and verify SHA-256 equal to the original.
+10. Verify old v0.2 Sessions still load; confirm the AWS Budget alert remains enabled.
 
-1. Create a **new private GitHub repo**, e.g. `RFID_Offline_Pilot`. Put all files in this folder in the repo root. **Do not overwrite the existing RFID Dashboard repo.**
-2. Run locally: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && streamlit run app.py`. Without secrets, uploads can be previewed but cannot be archived.
-3. Optionally save *local* `.streamlit/secrets.toml` by copying `.streamlit/secrets.toml.example`, replacing the placeholders, and verifying it is ignored by Git. **Never commit the real file.**
-4. At https://share.streamlit.io choose **Create app**, select the private GitHub repo, branch `main`, and entrypoint `app.py`.
-5. In **Advanced settings → Secrets**, paste the same TOML keys using **the exact S3 bucket name**, AWS Region `us-east-2`, and the restricted IAM access key. Keep the app private and invite only the approved lab testers.
-6. Deploy. Verify the app can list the S3 bucket without an AccessDenied exception, and run the sample upload test.
-7. In a private pilot, use Streamlit's private-app **viewer permissions**. Do not publish the app publicly with an S3 upload credential attached. Restrict invitations to trusted lab members.
+## Security and data integrity
 
-Streamlit docs:
-- https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy
-- https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management
-- https://docs.streamlit.io/deploy/streamlit-community-cloud/share-your-app
+- **S3:** bucket remains private, Block Public Access enabled, SSE-S3. The IAM policy `iam/rfid-s3-policy.template.json` already permits `sessions/*`, including append-only metadata under `sessions/_metadata/`. Do not add `DeleteObject` or wildcard S3 account permissions.
+- **Secrets:** only in Streamlit Cloud Secrets; not in Git, screenshots, or logs. Keep Streamlit App **private** with restricted invited viewers.
+- **Metadata model:** each edit is a uniquely named new JSON object under `sessions/_metadata/tag/`, `/session/` or `/plan/`. Older edits are never deleted/overwritten. Metadata editor name is self-declared; use external access logs if verified attribution is required.
+- **Scientific status:** recorded raw USER words, reference inputs, derived diagnostic temperature, synthetic model preview and physically verified PSI are different categories. No pressure determination from raw sensor words without validated model and decoder evidence.
+- **Backup/migration:** maintain TC22R original ZIP and a second off-cloud backup; migrate S3 archived ZIPs and metadata events into the future lab-server importer. Preserve recording timestamps, EPC, original USER words, Session / Reading IDs, SHA256 and interpretation versions.
 
-### Important limits
-
-- Streamlit Community Cloud's local filesystem is **not persistent storage**; save completed uploads to S3.
-- This prototype lists S3 objects instead of maintaining a separate Sheets/DynamoDB index; simpler for a small lab pilot.
-- Streamlit viewer control is at the **app level**. This first version does not implement per-operator Session ACLs; all invited viewers can read the archived sessions. If users must be isolated from each other's data, add authenticated per-user authorization before deployment.
-- Streamlit's shared service has uptime, memory and upload-size constraints; retain session exports on the TC22R until confirmed archived.
-
-## 5. Validate the example session (no AWS needed)
-
-```bash
-python -m pip install -r requirements.txt pytest
-PYTHONPATH=. pytest -q tests
-```
-
-Upload `examples/sample_session.zip` or `examples/sample_readings.csv` to the Streamlit app. Validate:
-
-- 6 readings and 2 EPCs are shown.
-- Uploading the exact same file twice is idempotent: the second attempt reports "already archived", no overwrite.
-- Session Library loads the original file and can download it byte-for-byte.
-- Upload a second valid session with a **different Session ID**, then compare both sessions and export the comparison CSV.
-- Open the S3 Console to confirm the object exists under `sessions/PILOT_TEST_001/` and is not publicly accessible.
-
-`app.py` implements counts, mean RSSI, Session comparison, raw data table, CSV export and original file download. **It does NOT claim pressure or temperature estimation**, because the validated `RFID_Dashboard` decoder/calibration modules have not yet been integrated.
-
-## Pilot session interchange schema
-
-Accepted file types:
-
-- CSV with headers: `timestamp_utc,session_id,reader_id,epc,user0,user1,rssi` and optional `operator_id,reference_pressure_psi,reference_temperature_c,tag_name`.
-- ZIP containing exactly `manifest.json` and `readings.csv`. Manifest fields: `schema_version="rfid-offline-session/1.0"`, `session_id`, `reader_id`, `created_at_utc`, `record_count`, `operator_id` (optional).
-
-One file contains **one Reader ID and one Session ID**. Timestamps must include timezone; UTF-8 text; USER0/USER1 are 16-bit raw words represented as decimal or `0x`-prefixed hex. Import parsing normalizes timestamps for analysis **but S3 stores the original upload bytes unchanged**. The sample is synthetic demo data only.
-
-### Integrating ACTUAL TC22R exports and pressure processing
-
-Before real researchers use this to calculate pressure:
-
-1. Compare an actual exported TC22R Session to `examples/sample_session.zip` and implement an adapter in `rfid_formats.py` (or adjust Android export to match schema), preserving raw fields and collection timestamps.
-2. Reuse the existing Decoder Profile, calibration plan, model version and decision pipeline from `RFID_Dashboard` rather than inventing equations from USER0/USER1.
-3. Record `raw_record_id`, `session_id`, `decoder_version`, `calibration_version` and result provenance in the migrated data layer.
-4. Ensure the backend import is idempotent per Session/record, and verifies expected record counts and raw SHA-256 hashes.
-5. Do not discard Android local copies until the upload is confirmed, audited and backed up.
-
-## 6. Migration when the lab server is ready
-
-Objects are stored under:
-
-```
-s3://EXACT-BUCKET/sessions/<session-id>/<sha256>.csv
-s3://EXACT-BUCKET/sessions/<session-id>/<sha256>.zip
-```
-
-For each object: download original raw bytes; verify S3 metadata SHA256 equals downloaded SHA256; parse `manifest.json`/CSV and preserve time, EPC, USER0, USER1, RSSI, Session IDs; deduplicate by `(session_id, record_id)` or a stable equivalent agreed in the production importer; **only then** pass into the established decoder/calibration/decision pipeline. Record import provenance. Do not delete the S3 originals until a separate verified backup exists. See `MIGRATION.md`.
-
-## Security/cost checklist
-
-- [ ] Private repository + private app with invited viewers only
-- [ ] AWS Budget alerts $1 / $3 / $5 and verified recipient
-- [ ] Exact bucket name & Region, Block Public Access, default encryption
-- [ ] Only restricted IAM identity; no root keys, no delete permission
-- [ ] End-to-end S3 test successful, sha256 checked
-- [ ] Secure Streamlit Secrets configured, no credentials in Git
-- [ ] Raw session export locally retained until S3 receipt
-- [ ] Actual Android export adapter and validated decoder/calibration attached before real pressure reporting
-- [ ] AWS Free Plan expiry date noted; regular off-cloud backups planned
-
-
-## v0.2: real Dashboard chart/quality integration (experimental)
-
-Additional modules in `dashboard_components/` and `dashboard_services/` are
-copied from the uploaded original RFID_Dashboard `src/`, retaining its tested
-multi-tag Altair charts, nearest-time pairing, metrics and session quality
-summaries. `offline_analysis.py` adapts the pilot CSV / ZIP structure to the
-original DataFrame schema. Raw uploaded bytes and S3 immutable object layout
-are unchanged. No credentials or private configuration are included.
-
-- Upload / Session Library: Recorded trends for RSSI, USER0/USER1 payloads,
-  full packed words, BEST_ACC diagnostics, and other numeric fields present.
-- Session-quality and session-summary panels, header validation statistics.
-- Nearest-timestamp comparison of two EPCs, configurable tolerance.
-- Multi-session elapsed-time overlay to compare measurements from 2–5 archives.
-- Derived CSV can be downloaded; original raw archive remains immutable.
-
-**Not yet enabled:** live data, MQTT ACK, Auth API user/reader management,
-server-owned pressure models/calibration activation, validated physical pressure
-estimates, tag nicknames persisted in S3, complete original release provenance.
-Do not assume raw USER0/USER1 words establish valid physical pressure. A signed
-and approved calibration profile plus physical decoder validation is required.
-
-Deploy by committing this folder to the `RFID_Offline_Pilot` repository.
-Because `requirements.txt` now includes `altair`, Streamlit will install it.
-Streamlit Secrets `[aws]` are the same as v0.1. Back up the v0.1 git commit
-before replacing. For real TC22R exports, first validate schema compatibility
-against `rfid_formats.py`, which still requires the pilot contract.
-
-Full source review inventory: [`SOURCE_AUDIT.md`](SOURCE_AUDIT.md).
+See `MIGRATION.md` for permanent-server data import and `SOURCE_AUDIT.md` for source-derived coverage.

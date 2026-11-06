@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Phase 4C.1 pressure calibration profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "model_type", "status", "calibration_status", "parameters", "input_feature", "input_units", "scope", "operating_range"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$"},
+    "version": {"type": "integer", "minimum": 1, "maximum": 1000000},
+    "model_type": {"enum": ["linear_strain_v1", "linear_temperature_compensated_v1"]},
+    "status": {"enum": ["DRAFT", "ACTIVE", "RETIRED"]},
+    "calibration_status": {"enum": ["EXPERIMENTAL", "VALIDATED"]},
+    "input_feature": {"enum": ["strain_raw", "strain_microstrain"]},
+    "input_units": {"enum": ["decoded_count", "microstrain"]},
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "required": ["intercept", "slope"],
+      "properties": {
+        "intercept": {"type": "number"}, "slope": {"type": "number"},
+        "temperature_coefficient": {"type": "number"},
+        "temperature_reference_c": {"type": "number"}
+      }
+    },
+    "scope": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["epc"], "properties": {"epc": {"type": "string", "pattern": "^(?:[0-9A-F]{2}){4,32}$"}}},
+        {"type": "object", "additionalProperties": false, "required": ["profile_id"], "properties": {"profile_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$"}}}
+      ]
+    },
+    "operating_range": {
+      "type": "object", "additionalProperties": false,
+      "required": ["strain", "pressure_psi"],
+      "properties": {
+        "strain": {"$ref": "#/$defs/range"},
+        "temperature_c": {"$ref": "#/$defs/range"},
+        "pressure_psi": {"$ref": "#/$defs/range"}
+      }
+    },
+    "notes": {"type": "string", "maxLength": 1000},
+    "provenance": {"type": "string", "maxLength": 300},
+    "validation_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "report_sha256",
+        "reviewed_by",
+        "reviewed_at",
+        "model_id",
+        "model_version",
+        "decoder_profile",
+        "decoder_validation_id",
+        "input_feature",
+        "input_units"
+      ],
+      "properties": {
+        "evidence_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "report_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "reviewed_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "reviewed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "model_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "decoder_profile": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "decoder_validation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "input_feature": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "input_units": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      }
+    },
+    "activated_at": {"type": "string"}, "activated_by": {"type": "string"}
+  },
+  "$defs": {"range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}},
+  "allOf": [
+    {"if": {"properties": {"input_feature": {"const": "strain_raw"}}}, "then": {"properties": {"input_units": {"const": "decoded_count"}}}},
+    {"if": {"properties": {"input_feature": {"const": "strain_microstrain"}}}, "then": {"properties": {"input_units": {"const": "microstrain"}}}},
+    {"if": {"properties": {"model_type": {"const": "linear_temperature_compensated_v1"}}},
+     "then": {"properties": {"parameters": {"required": ["temperature_coefficient", "temperature_reference_c"]}, "operating_range": {"required": ["temperature_c"]}}},
+     "else": {"properties": {"parameters": {"maxProperties": 2}}}}
+  ]
+}
